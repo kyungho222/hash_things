@@ -1,5 +1,6 @@
 import unittest
-from simhash_matcher.simhash_matcher import format_simhash, has_simhash_match, make_simhash
+
+from simhash_matcher.simhash_matcher import has_hash, format_simhash, make_simhash
 
 
 class Cursor:
@@ -18,11 +19,17 @@ class SimhashMatcherTests(unittest.TestCase):
     def test_same_input_generates_same_hash(self):
         self.assertEqual(make_simhash("제목", "본문 내용"), make_simhash("제목", "본문 내용"))
 
-    def test_boolean_match_only(self):
+    def test_has_hash_runs_create_and_compare(self):
         value = make_simhash("제목", "본문 내용")
         db = Connection({format_simhash(value)})
-        self.assertIs(has_simhash_match(db, value, table="crawled_pages"), True)
-        self.assertIs(has_simhash_match(db, value + 1, table="crawled_pages"), False)
+        self.assertIs(has_hash(db, "제목", "본문 내용", table="ASADAL_ce77dc5e9fd4_LEARN_LIST"), True)
+        self.assertIs(has_hash(db, "다른 제목", "다른 본문", table="ASADAL_ce77dc5e9fd4_LEARN_LIST"), False)
+
+    def test_missing_payload_logs_warning_and_skips(self):
+        with self.assertLogs("simhash_matcher.simhash_matcher", level="WARNING") as logs:
+            result = has_hash(Connection(set()), None, "본문", table="ASADAL_ce77dc5e9fd4_LEARN_LIST")
+        self.assertIs(result, False)
+        self.assertIn("simhash 생성에 필요한 payload 중 subject 누락", logs.output[0])
 
 
 if __name__ == "__main__": unittest.main()
