@@ -1,60 +1,176 @@
-﻿from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
-from urllib.request import Request, urlopen
-from html import unescape
 from datetime import datetime
-import re,json,unicodedata
-MEM=[]; NEXT_ID=1
+from html import unescape
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
+from urllib.request import Request, urlopen
 
-def clean(v): return re.sub(r'\s+',' ',unicodedata.normalize('NFC',unescape(re.sub(r'<[^>]+>',' ',v)))).strip()
-def simhash(title,body):
- v=[0]*64
- for tok in re.findall(r'[\w가-힣]+',clean(title+'\n---CONTENT---\n'+body).lower()):
-  h=0xcbf29ce484222325
-  for ch in tok:h=((h^ord(ch))*0x100000001b3)&((1<<64)-1)
-  for i in range(64):v[i]+=1 if h&(1<<i) else -1
- return format(sum(1<<i for i,x in enumerate(v) if x>=0),'016x')
-def parse(url):
- raw=urlopen(Request(url,headers={'User-Agent':'Mozilla/5.0'}),timeout=20).read().decode('utf-8','replace')
- # Prefer a known announcement body; then semantic main/article; never use navigation as body.
- scope=raw[raw.find('epform bbs gosi view'):] if 'epform bbs gosi view' in raw else raw
- rows=re.findall(r'<tr>(.*?)</tr>',scope,re.S); vals=[]
- for r in rows:
-  m=re.findall(r'<td[^>]*>(.*?)</td>',r,re.S)
-  if m: vals.append(clean(m[0]))
- if len(vals)>=7: title,body=vals[4],vals[6]
- else:
-  tm=re.search(r'<(?:h1|h2)[^>]*>(.*?)</(?:h1|h2)>',scope,re.S|re.I); title=clean(tm.group(1)) if tm else clean(re.search(r'<title>(.*?)</title>',raw,re.S|re.I).group(1))
-  bm=re.search(r'<(?:article|main)[^>]*>(.*?)</(?:article|main)>',scope,re.S|re.I); body=clean(bm.group(1)) if bm else ''
- date=re.search(r'(20\d{2}[-./]\d{1,2}[-./]\d{1,2})',scope); return {'url':url,'title':title,'body':body,'simhash':simhash(title,body),'registered_date':date.group(1) if date else None}
-class H(SimpleHTTPRequestHandler):
- def out(self,x,status=200):
-  b=json.dumps(x,ensure_ascii=False).encode();self.send_response(status);self.send_header('Content-Type','application/json; charset=utf-8');self.send_header('Content-Length',str(len(b)));self.end_headers();self.wfile.write(b)
- def do_GET(self):
-  global NEXT_ID
-  p=urlparse(self.path); q=parse_qs(p.query)
-  try:
-   if p.path=='/api/records':return self.out({'records':MEM})
-   if p.path=='/api/clear':
-    MEM.clear(); NEXT_ID=1
-    return self.out({'cleared': True})
-   if p.path=='/api/delete':
-    record_id=int(q.get('id',['0'])[0]); before=len(MEM); MEM[:]=[x for x in MEM if x['id']!=record_id]
-    return self.out({'deleted': len(MEM)!=before})
-   if p.path not in ('/api/store','/api/check'): return super().do_GET()
-   u=q.get('url',[''])[0]
-   if urlparse(u).scheme not in ('http','https'):raise ValueError('http/https URL을 입력하세요.')
-   d=parse(u)
-   if p.path=='/api/check':
-    matches=[x for x in MEM if x['simhash']==d['simhash']];return self.out({'parsed':d,'duplicate':bool(matches),'matches':matches})
-   matches=[x for x in MEM if x['simhash']==d['simhash']]
-   if matches: return self.out({'saved': False, 'duplicate': True, 'matches': matches, 'parsed': d})
-   d.update({'id':NEXT_ID,'saved_at':datetime.now().strftime('%Y-%m-%d %H:%M:%S')});NEXT_ID+=1;MEM.append(d);return self.out({'saved':d,'duplicate':False})
-   
-  except Exception as e:return self.out({'error':str(e)},400)
-ThreadingHTTPServer(('127.0.0.1',4173),H).serve_forever()
+import json
+import os
+import re
+import unicodedata
+
+from simhash_matcher.simhash_matcher import format_simhash, make_simhash
+
+def load_local_env() -> None:
+    """Load only missing variables from the dashboard root .env file."""
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    if not os.path.isfile(env_path):
+        return
+    for line in open(env_path, encoding="utf-8"):
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
+load_local_env()
+MEMORY_DB: list[dict] = []
+NEXT_ID = 1
+F1_UUID_TAIL = "1062bd0194ea"
 
 
+def clean(value: str) -> str:
+    without_tags = re.sub(r"<[^>]+>", " ", value)
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFC", unescape(without_tags))).strip()
 
+
+def parse_url(url: str) -> dict:
+    raw = urlopen(Request(url, headers={"User-Agent": "Mozilla/5.0"}), timeout=20).read().decode("utf-8", "replace")
+    scope = raw[raw.find("epform bbs gosi view"):] if "epform bbs gosi view" in raw else raw
+    rows = re.findall(r"<tr>(.*?)</tr>", scope, re.S | re.I)
+    values = []
+    for row in rows:
+        cells = re.findall(r"<td[^>]*>(.*?)</td>", row, re.S | re.I)
+        if cells:
+            values.append(clean(cells[0]))
+
+    if len(values) >= 7:
+        subject, content = values[4], values[6]
+    else:
+        subject_match = re.search(r"<(?:h1|h2)[^>]*>(.*?)</(?:h1|h2)>", scope, re.S | re.I)
+        page_title = re.search(r"<title>(.*?)</title>", raw, re.S | re.I)
+        body_match = re.search(r"<(?:article|main)[^>]*>(.*?)</(?:article|main)>", scope, re.S | re.I)
+        subject = clean(subject_match.group(1)) if subject_match else clean(page_title.group(1)) if page_title else ""
+        content = clean(body_match.group(1)) if body_match else ""
+
+    simhash_value = make_simhash(subject, content)
+    if simhash_value is None:
+        raise ValueError("파싱한 subject 또는 content가 비어 있습니다.")
+
+    date_match = re.search(r"(20\d{2}[-./]\d{1,2}[-./]\d{1,2})", scope)
+    return {
+        "url": url,
+        "subject": subject,
+        "content": content,
+        "hash": format_simhash(simhash_value),
+        "registered_date": date_match.group(1) if date_match else None,
+    }
+
+def f1_bridge(payload: dict) -> dict:
+    action, db_name = str(payload.get("action") or ""), str(payload.get("db_name") or "").strip()
+    token = os.getenv("F1_DEV_DB_BRIDGE_API_TOKEN", "").strip()
+    if not db_name: raise ValueError("db_name을 입력하세요.")
+    if not token: raise ValueError("F1_DEV_DB_BRIDGE_API_TOKEN 환경 변수가 설정되지 않았습니다.")
+    if action == "connection": query, params = "SELECT 1 AS connected", []
+    elif action == "hash":
+        tail, value = F1_UUID_TAIL, str(payload.get("hash") or "").lower()
+        if not re.fullmatch(r"[0-9a-f]{32}", value): raise ValueError("32자리 SimHash를 입력하세요.")
+        query, params = f"SELECT EXISTS (SELECT 1 FROM ASADAL_{tail}_LEARN_LIST WHERE hash = %s) AS is_exists", [value]
+    else: raise ValueError("지원하지 않는 DB 테스트입니다.")
+    request = Request(os.getenv("F1_DEV_DB_BRIDGE_URL", "https://api-aipro.chatbaram.com/api-aipro/f1_dev/Ai_Pro_filecrawler/backend/db-bridge/query"), data=json.dumps({"db_name":db_name,"engine":"mariadb","query":query,"params":params}).encode(), headers={"Content-Type":"application/json","X-F1-Dev-DB-Bridge-Token":token}, method="POST")
+    with urlopen(request, timeout=30) as response: return json.loads(response.read().decode("utf-8"))
+
+def public_record(record: dict) -> dict:
+    """Return dashboard response data without parsed subject/content."""
+    return {
+        key: record.get(key)
+        for key in ("id", "url", "hash", "saved_at")
+        if key in record
+    }
+
+
+def public_parsed(parsed: dict) -> dict:
+    """Return parse metadata without source text fields."""
+    return {
+        key: parsed.get(key)
+        for key in ("url", "hash")
+    }
+
+def check_hash(parsed: dict) -> dict:
+    matches = [record for record in MEMORY_DB if record["hash"] == parsed["hash"]]
+    duplicate = bool(matches)
+    return {
+        "duplicate": duplicate,
+        "save": not duplicate,
+        "hash": parsed["hash"],
+        "parsed": public_parsed(parsed),
+        "matches": [public_record(record) for record in matches],
+    }
+
+
+class Handler(SimpleHTTPRequestHandler):
+    def out(self, value: dict, status: int = 200) -> None:
+        body = json.dumps(value, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self) -> None:
+        try:
+            if self.path != "/api/f1-db/test":
+                return self.out({"error": "not found"}, 404)
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            return self.out(f1_bridge(payload))
+        except Exception as error:
+            return self.out({"error": str(error)}, 400)
+    def do_GET(self) -> None:
+        global NEXT_ID
+        parsed_url = urlparse(self.path)
+        query = parse_qs(parsed_url.query)
+        try:
+            if parsed_url.path == "/api/records":
+                return self.out({"records": [public_record(record) for record in MEMORY_DB]})
+            if parsed_url.path == "/api/clear":
+                MEMORY_DB.clear()
+                NEXT_ID = 1
+                return self.out({"cleared": True})
+            if parsed_url.path == "/api/delete":
+                record_id = int(query.get("id", ["0"])[0])
+                before = len(MEMORY_DB)
+                MEMORY_DB[:] = [record for record in MEMORY_DB if record["id"] != record_id]
+                return self.out({"deleted": len(MEMORY_DB) != before})
+            if parsed_url.path not in ("/api/store", "/api/check"):
+                return super().do_GET()
+
+            url = query.get("url", [""])[0]
+            if urlparse(url).scheme not in ("http", "https"):
+                raise ValueError("http/https URL을 입력하세요.")
+
+            source = parse_url(url)
+            result = check_hash(source)
+            if parsed_url.path == "/api/check":
+                return self.out(result)
+
+            if result["duplicate"]:
+                result["saved"] = None
+                return self.out(result)
+
+            saved = {
+                **source,
+                "id": NEXT_ID,
+                "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            NEXT_ID += 1
+            MEMORY_DB.append(saved)
+            result["saved"] = public_record(saved)
+            return self.out(result)
+        except Exception as error:
+            return self.out({"error": str(error)}, 400)
+
+
+if __name__ == "__main__":
+    ThreadingHTTPServer(("127.0.0.1", 4173), Handler).serve_forever()

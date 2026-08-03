@@ -1,16 +1,15 @@
-﻿"""Minimal database-backed SimHash duplicate checker.
-
-Only a boolean is returned to callers so crawlers do not need to know how a
-document hash is stored or compared.
-"""
+"""MariaDB-backed exact SimHash duplicate checker."""
 
 from __future__ import annotations
 
+import logging
 import re
 import unicodedata
 from typing import Any, Protocol
 
 from simhash import Simhash
+
+logger = logging.getLogger(__name__)
 
 
 class Cursor(Protocol):
@@ -23,39 +22,74 @@ class Connection(Protocol):
     def cursor(self) -> Cursor: ...
 
 
-def make_simhash(title: str, content: str) -> int:
-    """Create a deterministic 64-bit SimHash with the simhash library."""
-    text = _normalize(f"{title}\n---CONTENT---\n{content}")
-    return Simhash(text, f=64).value
-
-def has_simhash_match(
+def has_hash(
     connection: Connection,
-    simhash: int,
+    subject: str | None,
+    content: str | None,
     *,
     table: str,
-    column: str = "simhash",
 ) -> bool:
-    """Return only whether an exact SimHash value exists in one DB column.
+    """Create SimHash then return whether the same value already exists."""
+    simhash = make_simhash(subject, content)
+    if simhash is None:
+        return False
+    return has_simhash_match(connection, simhash, table=table)
 
-    ``table`` and ``column`` must be application-defined constant identifiers,
-    not request/user input. DB-API parameters safely bind the hash value.
-    """
+
+def check_hash(
+    connection: Connection,
+    subject: str | None,
+    content: str | None,
+    *,
+    table: str,
+) -> dict[str, bool | str | None]:
+    """Return duplicate/save state and a generated hash for caller-side storage."""
+    simhash = make_simhash(subject, content)
+    if simhash is None:
+        return {"duplicate": False, "save": False, "hash": None}
+
+    hash_value = format_simhash(simhash)
+    duplicate = has_simhash_match(connection, simhash, table=table)
+    return {"duplicate": duplicate, "save": not duplicate, "hash": hash_value}
+
+def make_simhash(subject: str | None, content: str | None) -> int | None:
+    """Create the crawler-compatible 128-bit subject/content XOR SimHash."""
+    missing = [name for name, value in (("subject", subject), ("content", content)) if not value]
+    if missing:
+        for field in missing:
+            logger.warning("simhash 생성에 필요한 payload 중 %s 누락", field)
+        return None
+    normalized_subject = _normalize(subject)
+    normalized_content = _normalize(content)
+    title_hash = Simhash(normalized_subject.split(), f=128).value
+    content_hash = Simhash(normalized_content.split(), f=128).value
+    return title_hash ^ content_hash
+
+
+
+
+def has_simhash_match(connection: Connection, simhash: int, *, table: str) -> bool:
+    """Return whether ``table.hash`` has an exact match for a SimHash value."""
     _validate_identifier(table)
-    _validate_identifier(column)
     cursor = connection.cursor()
     try:
         cursor.execute(
-            f"SELECT 1 FROM {table} WHERE {column} = %s LIMIT 1",
+            f"SELECT 1 FROM {table} WHERE hash = %s LIMIT 1",
             (format_simhash(simhash),),
         )
         return cursor.fetchone() is not None
+    except Exception as error:
+        if "unknown column" in str(error).lower() and "hash" in str(error).lower():
+            logger.warning("simhash 비교에 필요한 hash 컬럼 누락")
+            return False
+        raise
     finally:
         cursor.close()
 
 
 def format_simhash(simhash: int) -> str:
-    """Store/compare SimHash consistently as a zero-padded 16-char hex value."""
-    return f"{simhash & ((1 << 64) - 1):016x}"
+    """Return a zero-padded 32-character lowercase hexadecimal SimHash."""
+    return f"{simhash & ((1 << 128) - 1):032x}"
 
 
 def _normalize(value: str) -> str:
@@ -64,5 +98,4 @@ def _normalize(value: str) -> str:
 
 def _validate_identifier(value: str) -> None:
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
-        raise ValueError("table and column must be safe SQL identifiers")
-
+        raise ValueError("table must be a safe SQL identifier")

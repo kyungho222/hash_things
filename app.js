@@ -1,6 +1,123 @@
-﻿const $=x=>document.getElementById(x);const esc=s=>String(s||'—').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));async function call(path,url){let r=await fetch(path+'?url='+encodeURIComponent(url)),j=await r.json();if(!r.ok)throw Error(j.error||'처리 오류');return j}function card(d){return `<div class="record"><div class="recordhead"><b>#${d.id??'검사'} · ${esc(d.title)}</b>${d.id?`<button class="del" data-id="${d.id}">삭제</button>`:''}</div><span>URL <a class="url-link" href="${esc(d.url)}" target="_blank" rel="noopener noreferrer">${esc(d.url)}</a></span><span>SimHash <code>${d.simhash}</code> · 등록일 ${esc(d.registered_date)} · 저장일 ${esc(d.saved_at)}</span></div>`}async function load(){let j=await (await fetch('/api/records')).json();$('records').innerHTML=j.records.length?j.records.map(card).join(''):'저장된 데이터가 없습니다.';document.querySelectorAll('.del').forEach(b=>b.onclick=async()=>{if(confirm('이 저장 데이터를 삭제할까요?')){await fetch('/api/delete?id='+b.dataset.id);load()}})}function debug(payload,response){let view=truncateBodies(response);return `<details class="debug"><summary>Payload · Response 보기</summary><div class="debug-grid"><section class="debug-card payload"><h3>Payload</h3><pre>${jsonLink(JSON.stringify(payload,null,2))}</pre></section><section class="debug-card response"><h3>Response</h3><pre>${jsonLink(JSON.stringify(view,null,2))}</pre></section></div></details>`}$('storeBtn').onclick=async()=>{try{let payload={url:$('storeUrl').value};$('storeOut').textContent='제목·본문을 파싱하고 SimHash를 생성 중…';let j=await call('/api/store',payload.url);$('storeOut').innerHTML=(j.duplicate?`<strong class="dup">중복존재 — 저장하지 않았습니다.</strong><p>동일 SimHash를 가진 기존 저장 데이터입니다.</p>${j.matches.map(card).join('')}`:`<strong class="ok">메모리 DB 저장 완료</strong>${card(j.saved)}`)+debug(payload,j);load()}catch(e){$('storeOut').textContent='오류: '+e.message}};$('testBtn').onclick=async()=>{try{$('testOut').textContent='테스트 URL을 파싱하고 정확 일치 SimHash를 조회 중…';let j=await call('/api/check',$('testUrl').value);$('testOut').innerHTML=`<div class="parsed"><b>${esc(j.parsed.title)}</b><span>생성 SimHash <code>${j.parsed.simhash}</code></span></div>${j.duplicate?`<strong class="dup">중복존재</strong><p>동일 SimHash를 가진 저장 데이터입니다.</p>${j.matches.map(card).join('')}`:'<strong class="ok">중복 없음</strong><p>동일한 SimHash가 메모리 DB에 없습니다.</p>'}`}catch(e){$('testOut').textContent='오류: '+e.message}};$('refresh').onclick=load;$('clear').onclick=async()=>{if(confirm('메모리 DB의 모든 저장 데이터를 삭제할까요?')){await fetch('/api/clear');$('storeOut').textContent='메모리 DB를 비웠습니다.';$('testOut').textContent='';load()}};load();
+const $ = (id) => document.getElementById(id);
+const esc = (value) => String(value ?? "—").replace(/[&<>"']/g, (char) => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+}[char]));
 
+async function call(path, url) {
+  const response = await fetch(`${path}?url=${encodeURIComponent(url)}`);
+  const json = await response.json();
+  if (!response.ok) throw new Error(json.error || "처리 오류");
+  return json;
+}
 
-function jsonLink(value){return esc(value).replace(/https?:\/\/[^\s"&]+/g,function(url){return '<a class="url-link" href="'+url+'" target="_blank" rel="noopener noreferrer">'+url+'</a>'})}
-function truncateBodies(value){if(Array.isArray(value))return value.map(truncateBodies);if(value&&typeof value==='object'){let copy={};for(const [key,item] of Object.entries(value))copy[key]=key==='body'&&typeof item==='string'&&item.length>100?item.slice(0,100)+` … (총 ${item.length}자, 화면 표시 생략)`:truncateBodies(item);return copy}return value}
+function link(url) {
+  const safe = esc(url);
+  return `<a class="url-link" href="${safe}" target="_blank" rel="noopener noreferrer">${safe}</a>`;
+}
 
+function jsonLink(value) {
+  return String(value).split(/(https?:\/\/[^\s"]+)/g).map((part, index) => {
+    if (index % 2 === 1) {
+      const safe = esc(part);
+      return `<a class="url-link" href="${safe}" target="_blank" rel="noopener noreferrer">${safe}</a>`;
+    }
+    return esc(part);
+  }).join("");
+}
+function recordCard(record) {
+  return `<div class="record">
+    <div class="recordhead">
+      <b>#${record.id ?? "검사"} · 저장 Hash</b>
+      ${record.id ? `<button class="del" data-id="${record.id}">삭제</button>` : ""}
+    </div>
+    <span>URL ${link(record.url)}</span>
+    <span>Hash <code>${esc(record.hash)}</code> · 저장일 ${esc(record.saved_at)}</span>
+  </div>`;
+}
+
+function debug(response) {
+  return `<details class="debug">
+    <summary>Response 보기</summary>
+    <div class="debug-grid debug-grid-single">
+      <section class="debug-card response">
+        <h3>Response</h3>
+        <pre>${jsonLink(JSON.stringify(response, null, 2))}</pre>
+      </section>
+    </div>
+  </details>`;
+}
+
+function resultView(result, isStore) {
+  const parsed = result.parsed;
+  const status = result.duplicate
+    ? `<strong class="dup">중복존재 — 저장하지 않았습니다.</strong><p>메모리 DB의 <code>hash</code> 컬럼에 동일한 값이 있습니다.</p>${result.matches.map(recordCard).join("")}`
+    : isStore
+      ? `<strong class="ok">메모리 DB 저장 완료</strong><p>동일한 <code>hash</code>가 없어 신규 저장이 가능합니다.</p>${recordCard(result.saved)}`
+      : `<strong class="ok">중복 없음</strong><p>메모리 DB의 <code>hash</code> 컬럼에 동일한 값이 없습니다.</p>`;
+
+  return `<div class="parsed">
+    <b>파싱 URL</b>
+    <span>${link(parsed.url)}</span>
+    <span>생성 Hash <code>${esc(result.hash)}</code> · duplicate <code>${result.duplicate}</code> · save <code>${result.save}</code></span>
+  </div>${status}${debug(result)}`;
+}
+async function load() {
+  const response = await fetch("/api/records");
+  const json = await response.json();
+  $("records").innerHTML = json.records.length ? json.records.map(recordCard).join("") : "저장된 데이터가 없습니다.";
+  document.querySelectorAll(".del").forEach((button) => {
+    button.onclick = async () => {
+      if (confirm("이 저장 데이터를 삭제할까요?")) {
+        await fetch(`/api/delete?id=${button.dataset.id}`);
+        load();
+      }
+    };
+  });
+}
+
+$("storeBtn").onclick = async () => {
+  try {
+    const url = $("storeUrl").value;
+    $("storeOut").textContent = "URL을 파싱하고 subject·content 기반 SimHash를 생성 중…";
+    const result = await call("/api/store", url);
+    $("storeOut").innerHTML = resultView(result, true);
+    load();
+  } catch (error) {
+    $("storeOut").textContent = `오류: ${error.message}`;
+  }
+};
+
+$("testBtn").onclick = async () => {
+  try {
+    const url = $("testUrl").value;
+    $("testOut").textContent = "URL을 파싱하고 생성 Hash를 메모리 DB에서 exact 비교 중…";
+    const result = await call("/api/check", url);
+    $("testOut").innerHTML = resultView(result, false);
+  } catch (error) {
+    $("testOut").textContent = `오류: ${error.message}`;
+  }
+};
+
+$("refresh").onclick = load;
+$("clear").onclick = async () => {
+  if (confirm("메모리 DB의 모든 저장 데이터를 삭제할까요?")) {
+    await fetch("/api/clear");
+    $("storeOut").textContent = "메모리 DB를 비웠습니다.";
+    $("testOut").textContent = "";
+    load();
+  }
+};
+
+async function f1Test(action) {
+  const payload = { action, db_name: $("f1Db").value, hash: $("f1Hash").value };
+  $("f1Out").textContent = "F1 Dev 읽기 전용 DB 브리지 조회 중…";
+  try {
+    const response = await fetch("/api/f1-db/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    const json = await response.json();
+    if (!response.ok) throw new Error(json.error || "DB 브리지 오류");
+    $("f1Out").innerHTML = `<strong class="ok">조회 완료</strong>${debug(json)}`;
+  } catch (error) { $("f1Out").textContent = `오류: ${error.message}`; }
+}
+$("f1Connect").onclick = () => f1Test("connection");
+$("f1HashCheck").onclick = () => f1Test("hash");
+load();
