@@ -35,6 +35,14 @@
     </section>
 
     <section class="panel">
+      <h2>3. F1 Dev DB 브리지 테스트</h2>
+      <p class="hint">읽기 전용 브리지입니다. 연결 및 <code>hash</code> exact 조회만 테스트합니다. INSERT/UPDATE/DELETE는 지원하지 않습니다.</p>
+      <div class="row"><input id="f1Db" value="dev_user" placeholder="db_name"><input value="1062bd0194ea" aria-label="고정 UUID tail" readonly><button id="f1Connect">연결 확인</button></div>
+      <div class="row" style="margin-top:8px"><input id="f1Hash" placeholder="32자리 SimHash"><button id="f1HashCheck">Hash 중복 조회</button></div>
+      <div id="f1Out" class="out"></div>
+    </section>
+
+    <section class="panel">
       <div class="title">
         <div>
           <h2>메모리 DB</h2>

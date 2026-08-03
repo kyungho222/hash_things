@@ -53,14 +53,19 @@ def check_hash(
     return {"duplicate": duplicate, "save": not duplicate, "hash": hash_value}
 
 def make_simhash(subject: str | None, content: str | None) -> int | None:
-    """Create a 64-bit SimHash, or skip with a warning for missing payload."""
+    """Create the crawler-compatible 128-bit subject/content XOR SimHash."""
     missing = [name for name, value in (("subject", subject), ("content", content)) if not value]
     if missing:
         for field in missing:
             logger.warning("simhash 생성에 필요한 payload 중 %s 누락", field)
         return None
-    text = _normalize(f"{subject}\n---CONTENT---\n{content}")
-    return Simhash(text, f=64).value
+    normalized_subject = _normalize(subject)
+    normalized_content = _normalize(content)
+    title_hash = Simhash(normalized_subject.split(), f=128).value
+    content_hash = Simhash(normalized_content.split(), f=128).value
+    return title_hash ^ content_hash
+
+
 
 
 def has_simhash_match(connection: Connection, simhash: int, *, table: str) -> bool:
@@ -83,8 +88,8 @@ def has_simhash_match(connection: Connection, simhash: int, *, table: str) -> bo
 
 
 def format_simhash(simhash: int) -> str:
-    """Return a zero-padded 16-character lowercase hexadecimal SimHash."""
-    return f"{simhash & ((1 << 64) - 1):016x}"
+    """Return a zero-padded 32-character lowercase hexadecimal SimHash."""
+    return f"{simhash & ((1 << 128) - 1):032x}"
 
 
 def _normalize(value: str) -> str:

@@ -5,13 +5,29 @@ from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
 import json
+import os
 import re
 import unicodedata
 
 from simhash_matcher.simhash_matcher import format_simhash, make_simhash
 
+def load_local_env() -> None:
+    """Load only missing variables from the dashboard root .env file."""
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    if not os.path.isfile(env_path):
+        return
+    for line in open(env_path, encoding="utf-8"):
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+load_local_env()
 MEMORY_DB: list[dict] = []
 NEXT_ID = 1
+F1_UUID_TAIL = "1062bd0194ea"
 
 
 def clean(value: str) -> str:
@@ -51,6 +67,20 @@ def parse_url(url: str) -> dict:
         "registered_date": date_match.group(1) if date_match else None,
     }
 
+def f1_bridge(payload: dict) -> dict:
+    action, db_name = str(payload.get("action") or ""), str(payload.get("db_name") or "").strip()
+    token = os.getenv("F1_DEV_DB_BRIDGE_API_TOKEN", "").strip()
+    if not db_name: raise ValueError("db_name을 입력하세요.")
+    if not token: raise ValueError("F1_DEV_DB_BRIDGE_API_TOKEN 환경 변수가 설정되지 않았습니다.")
+    if action == "connection": query, params = "SELECT 1 AS connected", []
+    elif action == "hash":
+        tail, value = F1_UUID_TAIL, str(payload.get("hash") or "").lower()
+        if not re.fullmatch(r"[0-9a-f]{32}", value): raise ValueError("32자리 SimHash를 입력하세요.")
+        query, params = f"SELECT EXISTS (SELECT 1 FROM ASADAL_{tail}_LEARN_LIST WHERE hash = %s) AS is_exists", [value]
+    else: raise ValueError("지원하지 않는 DB 테스트입니다.")
+    request = Request(os.getenv("F1_DEV_DB_BRIDGE_URL", "https://api-aipro.chatbaram.com/api-aipro/f1_dev/Ai_Pro_filecrawler/backend/db-bridge/query"), data=json.dumps({"db_name":db_name,"engine":"mariadb","query":query,"params":params}).encode(), headers={"Content-Type":"application/json","X-F1-Dev-DB-Bridge-Token":token}, method="POST")
+    with urlopen(request, timeout=30) as response: return json.loads(response.read().decode("utf-8"))
+
 def public_record(record: dict) -> dict:
     """Return dashboard response data without parsed subject/content."""
     return {
@@ -88,6 +118,15 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_POST(self) -> None:
+        try:
+            if self.path != "/api/f1-db/test":
+                return self.out({"error": "not found"}, 404)
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            return self.out(f1_bridge(payload))
+        except Exception as error:
+            return self.out({"error": str(error)}, 400)
     def do_GET(self) -> None:
         global NEXT_ID
         parsed_url = urlparse(self.path)

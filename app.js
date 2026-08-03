@@ -108,4 +108,16 @@ $("clear").onclick = async () => {
   }
 };
 
+async function f1Test(action) {
+  const payload = { action, db_name: $("f1Db").value, hash: $("f1Hash").value };
+  $("f1Out").textContent = "F1 Dev 읽기 전용 DB 브리지 조회 중…";
+  try {
+    const response = await fetch("/api/f1-db/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    const json = await response.json();
+    if (!response.ok) throw new Error(json.error || "DB 브리지 오류");
+    $("f1Out").innerHTML = `<strong class="ok">조회 완료</strong>${debug(json)}`;
+  } catch (error) { $("f1Out").textContent = `오류: ${error.message}`; }
+}
+$("f1Connect").onclick = () => f1Test("connection");
+$("f1HashCheck").onclick = () => f1Test("hash");
 load();

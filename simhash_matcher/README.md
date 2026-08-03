@@ -2,7 +2,7 @@
 
 모듈 파일: `simhash_matcher/simhash_matcher.py`
 
-이 모듈은 URL을 파싱하지 않습니다. 호출자가 파싱한 `subject`, `content`를 전달하면 64비트 SimHash를 생성하고 MariaDB 학습 테이블의 `hash` 컬럼에서 **exact 일치**를 확인합니다.
+이 모듈은 URL을 파싱하지 않습니다. 호출자가 파싱한 `subject`, `content`를 전달하면 128비트 제목·본문 XOR SimHash를 생성하고 MariaDB 학습 테이블의 `hash` 컬럼에서 **exact 일치**를 확인합니다.
 
 ## 1. 라이브러리 적용
 
@@ -103,7 +103,7 @@ if result["save"]:
 {
   "duplicate": false,
   "save": true,
-  "hash": "2fb34c0aa6310e34"
+  "hash": "2fb34c0aa6310e340a8fc58cefe84810"
 }
 ```
 
@@ -113,7 +113,7 @@ if result["save"]:
 |---|---|---|
 | `duplicate` | `db.table.hash`에 동일한 SimHash가 존재하는지 | `true`이면 중복으로 처리 |
 | `save` | 신규 레코드 저장 권장 여부 | `true`일 때만 DB 저장 진행 |
-| `hash` | `subject` + `content`에서 생성한 16자리 SimHash | 신규 저장 시 `hash` 컬럼에 저장 |
+| `hash` | `subject` + `content`에서 생성한 32자리 SimHash | 신규 저장 시 `hash` 컬럼에 저장 |
 
 ### 결과별 처리
 
@@ -141,7 +141,7 @@ WHERE hash = %s
 LIMIT 1;
 ```
 
-`%s`에는 생성된 16자리 SimHash가 파라미터 바인딩됩니다.
+`%s`에는 생성된 32자리 SimHash가 파라미터 바인딩됩니다.
 
 ## 7. Fallback과 로그
 
@@ -176,11 +176,11 @@ simhash 비교에 필요한 hash 컬럼 누락
 | `has_hash()` | `bool` | 생성·비교 후 중복 여부만 필요할 때 사용 |
 | `make_simhash()` | `int | None` | SimHash 값만 생성 |
 | `has_simhash_match()` | `bool` | SimHash 값만 DB에서 exact 비교 |
-| `format_simhash()` | `str` | DB 저장용 16자리 16진수 문자열 변환 |
+| `format_simhash()` | `str` | DB 저장용 32자리 16진수 문자열 변환 |
 
 ## 9. 현재 적용 범위
 
-- [x] `subject`, `content` 기반 64비트 SimHash 생성
+- [x] `subject`, `content` 기반 128비트 제목·본문 XOR SimHash 생성
 - [x] 지정 테이블의 `hash` 컬럼 exact 비교
 - [x] `duplicate`, `save`, `hash` response 반환
 - [x] payload·컬럼 누락 시 fallback 및 WARNING 로그
