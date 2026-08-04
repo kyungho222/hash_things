@@ -13,3 +13,7 @@
 .title{align-items:center}.actions{display:flex;align-items:center;gap:8px;flex:0 0 auto}.small{min-width:88px;height:38px;padding:0 14px;border-radius:7px;font-size:12px;box-shadow:0 1px 1px #12251a18}.small:hover{filter:brightness(.96);transform:translateY(-1px)}.secondary{background:#fff;color:#a43d31;border:1px solid #e9c9c3}.secondary:hover{background:#fff4f2}.del{border:1px solid #d9e2da;background:#fff;color:#5b6960;border-radius:5px;padding:4px 8px}.del:hover{border-color:#d88b80;color:#9d3d31;background:#fff7f5}@media(max-width:600px){.title{align-items:flex-start}.actions{margin-top:8px}.small{min-width:76px}}
 
 .url-link{color:#076a9e;text-decoration:underline;text-decoration-color:#9dc4d8;text-underline-offset:2px;overflow-wrap:anywhere}.url-link:hover{color:#034d76;text-decoration-color:currentColor}
+
+.debug-card h3{display:flex;align-items:center;justify-content:space-between;gap:8px}.copy-log{margin-left:10px;padding:4px 8px;border-radius:5px;background:#315f93;font-size:11px;line-height:1.2;white-space:nowrap}
+
+textarea{flex:1;min-height:96px;padding:12px;border:1px solid var(--line);border-radius:7px;font:13px/1.5 Arial,'Noto Sans KR',sans-serif;resize:vertical} .row:has(textarea){align-items:stretch}.row:has(textarea) button{align-self:stretch}
