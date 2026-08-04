@@ -1,4 +1,5 @@
 from datetime import datetime
+import asyncio
 from html import unescape
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -9,7 +10,7 @@ import os
 import re
 import unicodedata
 
-from simhash_matcher.simhash_matcher import format_simhash, make_simhash
+from simhash_matcher.public_simhash import format_simhash, make_simhash, public_simhash
 
 def load_local_env() -> None:
     """Load only missing variables from the dashboard root .env file."""
@@ -67,6 +68,22 @@ def parse_url(url: str) -> dict:
         "registered_date": date_match.group(1) if date_match else None,
     }
 
+async def parse_public_url(url: str) -> dict:
+    """Use the shared Playwright parser for dashboard memory DB actions."""
+    result = await public_simhash(url)
+    if result.get("skipped") or not result.get("simhash"):
+        raise ValueError(result.get("skip_reason") or "public SimHash extraction failed")
+    extracted = result.get("extracted") or {}
+    return {
+        "url": result.get("url") or url,
+        "subject": extracted.get("subject", ""),
+        "content": extracted.get("content", ""),
+        "hash": result["simhash"],
+        "registered_date": (extracted.get("metadata") or {}).get("registered_date"),
+        "extracted": extracted,
+    }
+
+
 def f1_bridge(payload: dict) -> dict:
     action, db_name = str(payload.get("action") or ""), str(payload.get("db_name") or "").strip()
     token = os.getenv("F1_DEV_DB_BRIDGE_API_TOKEN", "").strip()
@@ -110,6 +127,14 @@ def check_hash(parsed: dict) -> dict:
 
 
 class Handler(SimpleHTTPRequestHandler):
+    def guess_type(self, path: str) -> str:
+        extension = os.path.splitext(path)[1].lower()
+        return {
+            ".html": "text/html; charset=utf-8",
+            ".css": "text/css; charset=utf-8",
+            ".js": "application/javascript; charset=utf-8",
+        }.get(extension, super().guess_type(path))
+
     def out(self, value: dict, status: int = 200) -> None:
         body = json.dumps(value, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -132,6 +157,28 @@ class Handler(SimpleHTTPRequestHandler):
         parsed_url = urlparse(self.path)
         query = parse_qs(parsed_url.query)
         try:
+            if parsed_url.path == "/api/public-simhash":
+                url = query.get("url", [""])[0]
+                return self.out(asyncio.run(public_simhash(url)))
+            if parsed_url.path in ("/api/public-store", "/api/public-check"):
+                url = query.get("url", [""])[0]
+                source = asyncio.run(parse_public_url(url))
+                result = check_hash(source)
+                result["extracted"] = source["extracted"]
+                if parsed_url.path == "/api/public-check":
+                    return self.out(result)
+                if result["duplicate"]:
+                    result["saved"] = None
+                    return self.out(result)
+                saved = {
+                    **source,
+                    "id": NEXT_ID,
+                    "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+                NEXT_ID += 1
+                MEMORY_DB.append(saved)
+                result["saved"] = public_record(saved)
+                return self.out(result)
             if parsed_url.path == "/api/records":
                 return self.out({"records": [public_record(record) for record in MEMORY_DB]})
             if parsed_url.path == "/api/clear":
@@ -174,3 +221,4 @@ class Handler(SimpleHTTPRequestHandler):
 
 if __name__ == "__main__":
     ThreadingHTTPServer(("127.0.0.1", 4173), Handler).serve_forever()
+
