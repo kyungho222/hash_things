@@ -50,32 +50,3 @@ result = check_hash(
 
 The response adds `hamming_distance`. A positive threshold scans non-null `hash` values from the table in Python, so choose the threshold from real data and use an indexed candidate strategy before enabling it on a large table.
 
-
-## Batch request
-
-Use `POST /public_simhash/batch` when a crawler has multiple URLs. Each URL is processed independently and responses retain the same order as `urls`.
-
-```json
-{
-  "urls": [
-    "https://example.com/post/1",
-    "https://example.com/post/2"
-  ]
-}
-```
-
-The response is `{ "results": [ ... ] }`. Parallelism is fixed at `5`. The batch request accepts up to 50 URLs.
-
-
-## External call test
-
-After starting the API, replace `server-address` and `API_TOKEN` with the deployed server address and configured token.
-
-```bash
-curl -X POST "http://server-address:8000/public_simhash/batch" \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: API_TOKEN" \
-  -d '{"urls":["https://example.com/post/1","https://example.com/post/2"]}'
-```
-
-A successful response returns HTTP `200` and a `results` array. Test the service first with `GET /health`.

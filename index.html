@@ -9,7 +9,7 @@
 <body>
   <main>
     <header><p>VOLATILE MEMORY DB · EXACT HASH LOOKUP</p><h1>SimHash 대시보드</h1><span>URL에서 파싱한 제목·본문·metadata로 SimHash를 생성하고 메모리 DB의 <code>hash</code> 값과 exact 비교합니다.</span></header>
-    <section class="panel"><h2>0. Public SimHash 테스트</h2><p class="hint">URL을 Playwright로 렌더링해 제목·본문·metadata를 수집합니다. 공용 SimHash 생성 버튼은 SimHash 생성, 메모리 DB 중복 검사, 미중복 시 저장까지 한 번에 처리합니다.</p><div class="row"><input id="publicUrl" placeholder="SimHash를 생성할 URL"><button id="publicBtn">공용 SimHash 생성</button></div><div id="publicOut" class="out"></div></section>
+    <section class="panel"><h2>0. Public SimHash 테스트</h2><p class="hint">URL을 Playwright로 렌더링해 제목·본문·metadata를 수집합니다. 공용 SimHash 생성 버튼은 SimHash 생성, 메모리 DB 중복 검사, 미중복 시 저장까지 한 번에 처리합니다.</p><div class="row"><input id="publicUrl" placeholder="Enter one URL"><button id="publicBtn">공용 SimHash 생성</button></div><div id="publicOut" class="out"></div></section>
     <section class="panel"><h2>3. F1 Dev DB 브리지 테스트</h2><p class="hint">읽기 전용 브리지입니다. 연결과 <code>hash</code> exact 조회만 테스트합니다. INSERT/UPDATE/DELETE는 지원하지 않습니다.</p><div class="row"><input id="f1Db" value="dev_user" placeholder="db_name"><input value="1062bd0194ea" aria-label="고정 UUID tail" readonly><button id="f1Connect">연결 확인</button></div><div class="row" style="margin-top:8px"><input id="f1Hash" placeholder="32자리 SimHash"><button id="f1HashCheck">Hash 중복 조회</button></div><div id="f1Out" class="out"></div></section>
     <section class="panel"><div class="title"><div><h2>메모리 DB</h2><p class="hint">브라우저·서버를 종료하면 모두 사라지는 테스트용 저장소입니다.</p></div><div class="actions"><button class="small secondary" id="clear">전체 삭제</button><button class="small" id="refresh">새로고침</button></div></div><div id="records" class="records">저장된 데이터가 없습니다.</div></section>
   </main>

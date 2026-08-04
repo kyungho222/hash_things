@@ -1,7 +1,6 @@
 """External HTTP API for public URL SimHash generation."""
 from __future__ import annotations
 
-import asyncio
 import hmac
 import os
 from typing import Any
@@ -15,10 +14,6 @@ from simhash_matcher.public_simhash import public_simhash
 
 class PublicSimhashRequest(BaseModel):
     url: str = Field(..., description="One http/https URL to render with Playwright")
-
-
-class PublicSimhashBatchRequest(BaseModel):
-    urls: list[str] = Field(..., min_length=1, max_length=50, description="URLs to process independently (maximum 50)")
 
 
 app = FastAPI(
@@ -48,9 +43,6 @@ async def verify_api_key(x_api_key: str | None) -> None:
         raise HTTPException(status_code=401, detail="invalid API token")
 
 
-MAX_CONCURRENCY = 5
-
-
 @app.post("/public_simhash")
 async def create_public_simhash(
     payload: PublicSimhashRequest,
@@ -59,22 +51,6 @@ async def create_public_simhash(
     """Process one URL."""
     await verify_api_key(x_api_key)
     return await public_simhash(payload.url)
-
-
-@app.post("/public_simhash/batch")
-async def create_public_simhash_batch(
-    payload: PublicSimhashBatchRequest,
-    x_api_key: str | None = Header(default=None),
-) -> dict[str, Any]:
-    """Process URLs independently in parallel and preserve input order."""
-    await verify_api_key(x_api_key)
-    semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
-
-    async def process(url: str) -> dict[str, Any]:
-        async with semaphore:
-            return await public_simhash(url)
-
-    return {"results": await asyncio.gather(*(process(url) for url in payload.urls))}
 
 
 if __name__ == "__main__":

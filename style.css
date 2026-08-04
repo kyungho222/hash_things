@@ -15,3 +15,5 @@
 .url-link{color:#076a9e;text-decoration:underline;text-decoration-color:#9dc4d8;text-underline-offset:2px;overflow-wrap:anywhere}.url-link:hover{color:#034d76;text-decoration-color:currentColor}
 
 .debug-card h3{display:flex;align-items:center;justify-content:space-between;gap:8px}.copy-log{margin-left:10px;padding:4px 8px;border-radius:5px;background:#315f93;font-size:11px;line-height:1.2;white-space:nowrap}
+
+textarea{flex:1;min-height:96px;padding:12px;border:1px solid var(--line);border-radius:7px;font:13px/1.5 Arial,'Noto Sans KR',sans-serif;resize:vertical} .row:has(textarea){align-items:stretch}.row:has(textarea) button{align-self:stretch}

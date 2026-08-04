@@ -155,41 +155,55 @@ async def public_simhash(url: str | None) -> dict[str, Any]:
                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 await page.wait_for_timeout(500)
                 extracted = await page.evaluate(r"""() => {
-                  const text = el => (el?.innerText || '').replace(/\s+/g, ' ').trim();
-                  const contentSelectors = ['#contents', '.board_detail_wrap', '.board-view', '.board_view', '.view-content', '.view_content', '.detail_con', 'article', '.sub_contents', '#content', '.contents', '.content', 'main'];
-                  const root = contentSelectors.map(selector => document.querySelector(selector)).find(Boolean) || document.body;
-                  const rows = [...root.querySelectorAll('tr')];
-                  const tableValue = label => {
-                    for (const row of rows) {
-                      const header = [...row.querySelectorAll('th')].find(node => text(node) === label);
-                      const value = header && row.querySelector('td');
-                      if (value && text(value)) return text(value);
-                    }
-                    return '';
-                  };
-                  const metadata = Object.fromEntries(rows.flatMap(row => {
-                    const label = text(row.querySelector('th'));
-                    const value = text(row.querySelector('td'));
-                    return label && value && !['\uC81C\uBAA9', '\uB0B4\uC6A9'].includes(label) ? [[label, value]] : [];
-                  }));
-                  const detailInfo = text(root.querySelector('.detail_info, .board-info, .board_info, [class*="metadata"]'));
-                  if (detailInfo) metadata['detail_info'] = detailInfo;
-                  const clone = root.cloneNode(true);
-                  clone.querySelectorAll([
-                    'script', 'style', 'noscript', 'header', '#header', 'nav', '#side', 'aside',
-                    'footer', '#footer', '.floating', '.floating_quick', '.share_panel', '.share', '.banner',
-                    '.site_panel', '.btn_area', '.board_nav', '[class*="gnb"]', '[class*="lnb"]', '[class*="breadcrumb"]',
-                    '[class*="prevnext"]', '[class*="paging"]'
-                  ].join(',')).forEach(el => el.remove());
-                  for (const row of clone.querySelectorAll('tr')) {
-                    const label = text(row.querySelector('th'));
-                    if (['\uC870\uD68C\uC218', '\uC870\uD68C \uC218', '\uCD94\uCC9C', '\uB313\uAE00'].includes(label)) row.remove();
-                  }
-                  const subject = tableValue('\uC81C\uBAA9') || text(root.querySelector('.detail_tit, h1, .board-title, .board_view_title, .page-title, .page_tit, h2')) || document.querySelector('meta[property="og:title"]')?.content || document.title;
-                  const content = tableValue('\uB0B4\uC6A9') || text(clone);
-                  const hashText = text(clone).replace(/\uC870\uD68C\uC218\s*:\s*\d+/g, '').replace(/\s+/g, ' ').trim();
-                  return JSON.stringify({ subject: subject.trim(), content, metadata, hash_text: hashText, root_selector: root.id ? '#' + root.id : root.tagName.toLowerCase() + (root.className ? '.' + String(root.className).trim().split(/\s+/).join('.') : '') });
-                }""")
+  const text = el => (el?.innerText || '').replace(/\s+/g, ' ').trim();
+  const contentSelectors = ['#contents', '.board_detail_wrap', '.board-view', '.board_view', '.view-content', '.view_content', '.detail_con', 'article', '.sub_contents', '#content', '.contents', '.content', 'main'];
+  const root = contentSelectors.map(selector => document.querySelector(selector)).find(Boolean) || document.body;
+  const rows = [...root.querySelectorAll('tr')];
+  const boardSignals = [
+    root.matches('[class*="bbs"], [class*="board"], [class*="view"]'),
+    Boolean(root.querySelector('.p-table__subject_text, .detail_tit, .board-title, .board_view_title, .p-table, table')),
+    rows.some(row => ['\uC81C\uBAA9', '\uB0B4\uC6A9', '\uC791\uC131\uC790', '\uCCA8\uBD80'].includes(text(row.querySelector('th')))),
+  ].filter(Boolean).length;
+  const pageType = boardSignals >= 2 ? 'board' : 'webpage';
+  const tableValue = label => {
+    for (const row of rows) {
+      const header = [...row.querySelectorAll('th')].find(node => text(node) === label);
+      const value = header && row.querySelector('td');
+      if (value && text(value)) return text(value);
+    }
+    return '';
+  };
+  const metadata = Object.fromEntries(rows.flatMap(row => {
+    const label = text(row.querySelector('th'));
+    const value = text(row.querySelector('td'));
+    return label && value && !['\uC81C\uBAA9', '\uB0B4\uC6A9'].includes(label) ? [[label, value]] : [];
+  }));
+  const detailInfo = text(root.querySelector('.detail_info, .board-info, .board_info, [class*="metadata"]'));
+  if (detailInfo) metadata.detail_info = detailInfo;
+  const clone = root.cloneNode(true);
+  clone.querySelectorAll(['script','style','noscript','header','#header','nav','#side','aside','footer','#footer','.floating','.floating_quick','.share_panel','.share','.banner','.site_panel','.btn_area','.board_nav','[class*="gnb"]','[class*="lnb"]','[class*="breadcrumb"]','[class*="prevnext"]','[class*="paging"]'].join(',')).forEach(el => el.remove());
+  const boardCandidates = [
+    [text(root.querySelector('.p-table__subject_text')), '.p-table__subject_text'],
+    [text(root.querySelector('.detail_tit')), '.detail_tit'],
+    [tableValue('\uC81C\uBAA9'), 'table:th[title]'],
+    [text(root.querySelector('.board-title, .board_view_title')), '.board-title'],
+  ];
+  const commonCandidates = [
+    [text(root.querySelector('h1, .page-title, .page_tit, h2')), 'content-heading'],
+    [document.querySelector('meta[property="og:title"]')?.content || '', 'meta:og:title'],
+    [document.title, 'document:title'],
+  ];
+  const weakBoardTitle = value => /\uC0C1\uC138\uBCF4\uAE30|\uC6B0\uB9AC\s*\uB3D9\s*\uC18C\uC2DD/.test(value) || /-\s*\uC131\uBD81\uAD6C\uCCAD$/.test(value);
+  const selected = (pageType === 'board' ? [...boardCandidates, ...commonCandidates] : commonCandidates).find(([value, source]) => value && (pageType !== 'board' || !weakBoardTitle(value) || ['.p-table__subject_text', '.detail_tit', 'table:th[title]'].includes(source))) || ['', 'none'];
+  const subject = selected[0].trim();
+  const bodyNode = root.querySelector('td[title="\uB0B4\uC6A9"], .p-table__content, .board-content, .board_content, .view-content, .view_content');
+  const tableContent = tableValue('\uB0B4\uC6A9');
+  const content = tableContent || (bodyNode ? text(bodyNode) : text(clone));
+  const contentSource = tableContent ? 'table:th[content]' : bodyNode ? '.content-node' : 'content-root';
+  const hashText = [subject, content, ...Object.entries(metadata).flat()].filter(Boolean).join(' ').replace(/\uC870\uD68C\uC218\s*:\s*\d+/g, '').replace(/\s+/g, ' ').trim();
+  const rootSelector = root.id ? '#' + root.id : root.tagName.toLowerCase() + (root.className ? '.' + String(root.className).trim().split(/\s+/).join('.') : '');
+  return JSON.stringify({subject, content, metadata, hash_text: hashText, page_type: pageType, title_source: selected[1], content_source: contentSource, root_selector: rootSelector});
+}""")
                 try:
                     extracted = json.loads(extracted) if isinstance(extracted, str) else None
                 except json.JSONDecodeError:
@@ -207,6 +221,9 @@ async def public_simhash(url: str | None) -> dict[str, Any]:
                         "content": extracted.get("content", ""),
                         "content_length": len(extracted.get("content", "")),
                         "metadata": extracted.get("metadata", {}),
+                        "page_type": extracted.get("page_type", "webpage"),
+                        "title_source": extracted.get("title_source", ""),
+                        "content_source": extracted.get("content_source", ""),
                         "root_selector": extracted.get("root_selector", ""),
                         "hash_input_length": len(extracted.get("hash_text", "")),
                     },

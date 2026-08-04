@@ -9,6 +9,7 @@ import json
 import os
 import re
 import unicodedata
+from threading import Lock
 
 from simhash_matcher.public_simhash import format_simhash, make_simhash, public_simhash
 
@@ -27,6 +28,7 @@ def load_local_env() -> None:
 
 load_local_env()
 MEMORY_DB: list[dict] = []
+MEMORY_DB_LOCK = Lock()
 NEXT_ID = 1
 F1_UUID_TAIL = "1062bd0194ea"
 
@@ -74,12 +76,14 @@ async def parse_public_url(url: str) -> dict:
     if result.get("skipped") or not result.get("simhash"):
         raise ValueError(result.get("skip_reason") or "public SimHash extraction failed")
     extracted = result.get("extracted") or {}
+    metadata = extracted.get("metadata") or {}
+    registered_date = next((match.group(0) for value in metadata.values() if (match := re.search(r"20\d{2}[-./]\d{1,2}[-./]\d{1,2}", str(value)))), None)
     return {
         "url": result.get("url") or url,
         "subject": extracted.get("subject", ""),
         "content": extracted.get("content", ""),
         "hash": result["simhash"],
-        "registered_date": (extracted.get("metadata") or {}).get("registered_date"),
+        "registered_date": registered_date,
         "extracted": extracted,
     }
 
@@ -102,7 +106,7 @@ def public_record(record: dict) -> dict:
     """Return dashboard response data without parsed subject/content."""
     return {
         key: record.get(key)
-        for key in ("id", "url", "hash", "saved_at")
+        for key in ("id", "url", "subject", "hash", "registered_date", "saved_at")
         if key in record
     }
 
@@ -163,22 +167,23 @@ class Handler(SimpleHTTPRequestHandler):
             if parsed_url.path in ("/api/public-store", "/api/public-check"):
                 url = query.get("url", [""])[0]
                 source = asyncio.run(parse_public_url(url))
-                result = check_hash(source)
-                result["extracted"] = source["extracted"]
-                if parsed_url.path == "/api/public-check":
+                with MEMORY_DB_LOCK:
+                    result = check_hash(source)
+                    result["extracted"] = source["extracted"]
+                    if parsed_url.path == "/api/public-check":
+                        return self.out(result)
+                    if result["duplicate"]:
+                        result["saved"] = None
+                        return self.out(result)
+                    saved = {
+                        **source,
+                        "id": NEXT_ID,
+                        "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    }
+                    NEXT_ID += 1
+                    MEMORY_DB.append(saved)
+                    result["saved"] = public_record(saved)
                     return self.out(result)
-                if result["duplicate"]:
-                    result["saved"] = None
-                    return self.out(result)
-                saved = {
-                    **source,
-                    "id": NEXT_ID,
-                    "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                }
-                NEXT_ID += 1
-                MEMORY_DB.append(saved)
-                result["saved"] = public_record(saved)
-                return self.out(result)
             if parsed_url.path == "/api/records":
                 return self.out({"records": [public_record(record) for record in MEMORY_DB]})
             if parsed_url.path == "/api/clear":
