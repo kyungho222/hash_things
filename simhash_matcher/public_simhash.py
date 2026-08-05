@@ -1,12 +1,18 @@
-﻿"""SimHash generation and MariaDB exact duplicate checker."""
+"""SimHash generation and MariaDB exact duplicate checker."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
 import re
 import unicodedata
+from pathlib import Path
 from typing import Any, Protocol
 
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 from simhash import Simhash
 
 logger = logging.getLogger(__name__)
@@ -234,3 +240,157 @@ async def public_simhash(url: str | None) -> dict[str, Any]:
     except Exception as error:
         logger.warning("public SimHash 처리 건너뜀: %s", error)
         return {"url": url, "simhash": None, "skipped": True, "skip_reason": f"{type(error).__name__}: {str(error)[:160]}"}
+
+
+def load_local_env() -> None:
+    """Load unset environment values from the service's optional .env file."""
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    if not env_path.is_file():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
+
+
+load_local_env()
+
+
+class PublicSimhashRequest(BaseModel):
+    """Crawler identity and the URL to parse and compare."""
+
+    url: str = Field(..., description="One http/https URL to render with Playwright")
+    dbname: str = Field(..., description="MariaDB database name for this crawl")
+    chatbotid: str = Field(..., description="Chatbot UUID used to select its LEARN_LIST table")
+
+
+def _database_settings(dbname: str, chatbotid: str) -> tuple[dict[str, Any], str] | None:
+    """Build the database and LEARN_LIST table from the request identity."""
+    database = str(dbname or "").strip()
+    compact_chatbot_id = re.sub(r"-", "", str(chatbotid or "").strip()).lower()
+    if not re.fullmatch(r"[A-Za-z0-9_]+", database):
+        raise ValueError("invalid_dbname")
+    if not re.fullmatch(r"[0-9a-f]{32}", compact_chatbot_id):
+        raise ValueError("invalid_chatbotid")
+    required = {
+        "host": os.getenv("SIMHASH_DB_HOST", "").strip(),
+        "user": os.getenv("SIMHASH_DB_USER", "").strip(),
+        "password": os.getenv("SIMHASH_DB_PASSWORD", ""),
+        "database": database,
+    }
+    if not all(required[key] for key in ("host", "user", "database")):
+        return None
+    table = f"ASADAL_{compact_chatbot_id[-12:]}_LEARN_LIST"
+    return ({**required, "port": int(os.getenv("SIMHASH_DB_PORT", "3306")), "charset": "utf8mb4"}, table)
+
+
+def _check_database_exact(simhash: str, dbname: str, chatbotid: str) -> tuple[bool | None, str | None]:
+    """Check this chatbot's fixed hash column; None means the DB could not be checked."""
+    configured = _database_settings(dbname, chatbotid)
+    if configured is None:
+        return None, "database_not_configured"
+    settings, table = configured
+    try:
+        import pymysql
+
+        connection = pymysql.connect(**settings)
+        try:
+            distance = find_simhash_match(connection, int(simhash, 16), table=table, max_hamming_distance=0)
+            return distance is not None, None
+        finally:
+            connection.close()
+    except Exception as error:
+        logger.warning("public SimHash DB comparison skipped: %s", error)
+        return None, f"database_check_failed: {type(error).__name__}"
+
+
+PUBLIC_SIMHASH_CONCURRENCY = 10
+_PUBLIC_SIMHASH_INFLIGHT: dict[tuple[str, str, str], asyncio.Task[dict[str, Any]]] = {}
+_PUBLIC_SIMHASH_SEMAPHORE: asyncio.Semaphore | None = None
+
+
+def _public_simhash_semaphore() -> asyncio.Semaphore:
+    global _PUBLIC_SIMHASH_SEMAPHORE
+    if _PUBLIC_SIMHASH_SEMAPHORE is None:
+        _PUBLIC_SIMHASH_SEMAPHORE = asyncio.Semaphore(PUBLIC_SIMHASH_CONCURRENCY)
+    return _PUBLIC_SIMHASH_SEMAPHORE
+
+
+async def _resolve_public_simhash(url: str, dbname: str, chatbotid: str) -> dict[str, Any]:
+    """Render, hash, and exact-compare one URL as one awaited result."""
+    async with _public_simhash_semaphore():
+        parsed = await public_simhash(url)
+    simhash = parsed.get("simhash")
+    if parsed.get("skipped") or not isinstance(simhash, str):
+        return {
+            "url": parsed.get("url") or url,
+            "simhash": simhash,
+            "duplicate": False,
+            "save": False,
+            "skipped": True,
+            "skip_reason": parsed.get("skip_reason", "simhash_generation_failed"),
+        }
+    duplicate, database_reason = await asyncio.to_thread(_check_database_exact, simhash, dbname, chatbotid)
+    if duplicate is None:
+        return {
+            "url": parsed.get("url") or url,
+            "simhash": simhash,
+            "duplicate": False,
+            "save": False,
+            "skipped": True,
+            "skip_reason": database_reason,
+        }
+    return {
+        "url": parsed.get("url") or url,
+        "simhash": simhash,
+        "duplicate": duplicate,
+        "save": not duplicate,
+        "skipped": False,
+    }
+
+app = FastAPI(
+    title="Public SimHash API",
+    version="2.1.0",
+    description="Render one URL, create SimHash, and perform an exact MariaDB hash comparison.",
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["POST", "GET", "OPTIONS"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/health")
+async def health() -> dict[str, Any]:
+    return {"status": "ok", "service": "public_simhash", "mode": "synchronous", "max_concurrency": PUBLIC_SIMHASH_CONCURRENCY, "inflight": len(_PUBLIC_SIMHASH_INFLIGHT)}
+
+
+async def _shared_public_simhash_result(url: str, dbname: str, chatbotid: str) -> dict[str, Any]:
+    """Reuse only an unfinished task for the same URL, then await its result."""
+    task_key = (url, dbname, chatbotid)
+    task = _PUBLIC_SIMHASH_INFLIGHT.get(task_key)
+    if task is None or task.done():
+        task = asyncio.create_task(_resolve_public_simhash(url, dbname, chatbotid), name=f"public-simhash:{url[:80]}")
+        _PUBLIC_SIMHASH_INFLIGHT[task_key] = task
+
+        def _remove_finished_task(finished_task: asyncio.Task[dict[str, Any]]) -> None:
+            if _PUBLIC_SIMHASH_INFLIGHT.get(task_key) is finished_task:
+                _PUBLIC_SIMHASH_INFLIGHT.pop(task_key, None)
+
+        task.add_done_callback(_remove_finished_task)
+    return await asyncio.shield(task)
+
+
+@app.post("/public_simhash")
+async def create_public_simhash(payload: PublicSimhashRequest) -> dict[str, Any]:
+    """Wait for the URL's shared task and return its final duplicate decision."""
+    return await _shared_public_simhash_result(payload.url, payload.dbname, payload.chatbotid)
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("simhash_matcher.public_simhash:app", host="0.0.0.0", port=8000, reload=False)

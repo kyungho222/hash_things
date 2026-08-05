@@ -26,4 +26,28 @@ $("publicBtn").onclick = publicAction;
 $("refresh").onclick = load;
 $("clear").onclick = async () => { if (confirm("Clear all memory DB records?")) { await fetch("/api/clear"); $("publicOut").textContent = "Memory DB cleared."; load(); } };
 async function f1Test(action) { const payload = { action, db_name: $("f1Db").value, hash: $("f1Hash").value }; $("f1Out").textContent = "Checking F1 Dev DB bridge..."; try { const response = await fetch("/api/f1-db/test", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || "DB bridge error"); $("f1Out").innerHTML = `<strong class="ok">Done</strong>${debug(data)}`; } catch (error) { $("f1Out").textContent = `Error: ${error.message}`; } }
-$("f1Connect").onclick = () => f1Test("connection"); $("f1HashCheck").onclick = () => f1Test("hash"); load();
+$("f1Connect").onclick = () => f1Test("connection"); $("f1HashCheck").onclick = () => f1Test("hash");
+$("externalHealthBtn").onclick = async () => {
+  const endpoint = $("externalHealthEndpoint").value.trim();
+  try {
+    if (!endpoint) throw new Error("Health endpoint URL is required.");
+    $("externalOut").textContent = "Checking endpoint health...";
+    const response = await fetch(endpoint, { method: "GET" });
+    const result = await response.json();
+    const status = response.ok ? '<strong class="ok">Health check passed</strong>' : `<strong class="warn">HTTP ${response.status}</strong>`;
+    $("externalOut").innerHTML = `${status}<p>Endpoint ${link(endpoint)}</p>${debug(result)}`;
+  } catch (error) { $("externalOut").textContent = `Error: ${error.message}`; }
+};
+$("externalBtn").onclick = async () => {
+  const endpoint = $("externalEndpoint").value.trim();
+  const url = $("externalUrl").value.trim();
+  try {
+    if (!endpoint || !url) throw new Error("Endpoint URL and test URL are required.");
+    $("externalOut").textContent = "Waiting for parsing and duplicate decision...";
+    const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }) });
+    const result = await response.json();
+    const status = response.ok ? '<strong class="ok">Duplicate decision received</strong>' : `<strong class="warn">HTTP ${response.status}</strong>`;
+    $("externalOut").innerHTML = `${status}<p>Endpoint ${link(endpoint)}</p>${payloadResponse({ url }, result)}`;
+  } catch (error) { $("externalOut").textContent = `Error: ${error.message}`; }
+};
+load();
